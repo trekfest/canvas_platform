@@ -1,27 +1,32 @@
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
+from django.core.mail import send_mail
+from django.utils.crypto import get_random_string
 
 class CustomUserManager(BaseUserManager):
-    def create_user(self, email, username, first_name, last_name, password=None):
+    def create_user(self, email, username=None, first_name="", last_name="", password=None, role='student'):
         if not email:
             raise ValueError("Users must have an email address")
-        if not username:
-            raise ValueError("Users must have a username")
-
+        
         user = self.model(
             email=self.normalize_email(email),
-            username=username,
+            username=username or email.split('@')[0],
             first_name=first_name,
             last_name=last_name,
+            role=role,
         )
+        
+        if password:
+            user.set_password(password)
+        else:
+            user.set_unusable_password()
 
-        user.set_password(password)  # This hashes the password
         user.save(using=self._db)
         return user
 
     def create_superuser(self, email, username, first_name, last_name, password):
         user = self.create_user(
-            email=self.normalize_email(email),
+            email=email,
             username=username,
             first_name=first_name,
             last_name=last_name,
@@ -34,10 +39,17 @@ class CustomUserManager(BaseUserManager):
         return user
 
 class CustomUser(AbstractBaseUser, PermissionsMixin):
+    ROLE_CHOICES = [
+        ('admin', 'Admin'),
+        ('student', 'Student'),
+        ('teacher', 'Teacher'),
+    ]
+    
     email = models.EmailField(max_length=255, unique=True)
-    username = models.CharField(max_length=30, unique=True, null=True)
+    username = models.CharField(max_length=30, unique=True, null=True, blank=True)
     first_name = models.CharField(max_length=30)
     last_name = models.CharField(max_length=30)
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='student')
     date_joined = models.DateTimeField(auto_now_add=True)
     last_login = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
@@ -50,4 +62,3 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
-
