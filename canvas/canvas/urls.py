@@ -19,6 +19,8 @@ from django.urls import include, path, re_path
 
 from accounts.views import GoogleLoginCallback, GoogleLogin, LoginPage
 
+from accounts.views import GoogleLogin, LoginPage
+
 urlpatterns = [
     path("admin/", admin.site.urls),
     path('api/v1/auth/', include('accounts.urls')),
