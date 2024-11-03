@@ -1,6 +1,6 @@
 from django.contrib import admin
-from .models import CustomUser
 from django.contrib.auth.admin import UserAdmin
+from .models import CustomUser
 from .forms import CustomUserForm
 
 class CustomUserAdmin(UserAdmin):
@@ -9,24 +9,23 @@ class CustomUserAdmin(UserAdmin):
     search_fields = ('email', 'username', 'first_name', 'last_name')
     list_filter = ('role', 'is_staff', 'is_active')
 
-    # Make sure role field is included and editable in the fieldsets
-    fieldsets = UserAdmin.fieldsets + (
-        (None, {'fields': ('role',)}),  # Add the role field
-    )
-    add_fieldsets = UserAdmin.add_fieldsets + (
-        (None, {'fields': ('role',)}),  # Add the role field for adding new users
+    # Include role in fieldsets for editing existing users
+    fieldsets = (
+        (None, {'fields': ('email', 'password')}),
+        ('Personal Info', {'fields': ('username', 'first_name', 'last_name', 'role')}),
+        ('Permissions', {'fields': ('is_staff', 'is_superuser', 'is_active')}),
+        ('Important dates', {'fields': ('last_login', 'date_joined')}),
     )
 
-    # Ensure you set this to True to allow editing
-    def get_fieldsets(self, request, obj=None):
-        fieldsets = super().get_fieldsets(request, obj)
-        if obj:  # If we are editing an existing user
-            
-            return fieldsets
-        return fieldsets
-    
-    def get_readonly_fields(self, request, obj=None):
-        # Make date_joined read-only
-        return super().get_readonly_fields(request, obj) + ('date_joined','last_login')
-    
+    # Add role field when adding a new user
+    add_fieldsets = (
+        (None, {
+            'classes': ('wide',),
+            'fields': ('email', 'username', 'first_name', 'last_name', 'role', 'password1', 'password2'),
+        }),
+    )
+
+    # Make fields like `date_joined` and `last_login` read-only
+    readonly_fields = ('date_joined', 'last_login')
+
 admin.site.register(CustomUser, CustomUserAdmin)

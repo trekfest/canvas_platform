@@ -33,3 +33,10 @@ class UserLoginSerializer(serializers.Serializer):
         if user:
             return user
         raise serializers.ValidationError("Invalid credentials")
+    
+
+class UserUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = ['username', 'email', 'first_name', 'last_name', 'role']  
+        

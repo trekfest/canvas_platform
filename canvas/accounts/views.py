@@ -1,23 +1,26 @@
 import logging
+import secrets
 from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
 from allauth.socialaccount.providers.oauth2.client import OAuth2Client
 from dj_rest_auth.registration.views import SocialLoginView
 from django.conf import settings
 from urllib.parse import urljoin
 from django.dispatch import receiver
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, render
 from django.views import View
 import requests
 from django.urls import reverse
-from rest_framework import status
+from rest_framework import status, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import generics
 from .models import CustomUser
-from .serializers import UserLoginSerializer, UserRegistrationSerializer
+from .serializers import UserLoginSerializer, UserRegistrationSerializer, UserUpdateSerializer
 from dj_rest_auth.views import LoginView
 from allauth.account.signals import user_logged_in
 from django.contrib.auth import get_user_model
+from rest_framework.generics import RetrieveUpdateAPIView
+
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -67,16 +70,24 @@ class GoogleLoginCallback(APIView):
         first_name = user_info.get("given_name")
         last_name = user_info.get("family_name")
 
+        random_password = secrets.token_urlsafe(20)
+
         # Retrieve or create the user in the database
         user, created = CustomUser.objects.get_or_create(
             email=email,
-            defaults={'username': email.split('@')[0], "first_name": first_name, "last_name": last_name}
+            defaults={
+                'username': email.split('@')[0],
+                "first_name": first_name,
+                "last_name": last_name,
+                'password': random_password
+            }
         )
         if not user.username:
             user.username = email.split('@')[0]  
             user.save()
 
         if created:
+            user.set_password(random_password)
             user.save()  # Ensures the user data is saved
             logger.info(f"Created new user with pk={user.pk}, email={user.email}")
 
@@ -127,3 +138,19 @@ class UserLoginView(LoginView):
         if serializer.is_valid():
             return Response({"message": "Login successful"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class UserUpdateView(RetrieveUpdateAPIView):
+    queryset = CustomUser.objects.all()
+    serializer_class = UserUpdateSerializer
+    permission_classes = [permissions.IsAdminUser]
+
+    def get_object(self):
+        user_id = self.kwargs.get("pk")  # Assuming 'pk' is used in the URL
+        return get_object_or_404(CustomUser, pk=user_id)
+
+    def patch(self, request, *args, **kwargs):
+        user = self.get_object()
+        serializer = self.get_serializer(user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)  # This will raise a 400 response if validation fails
+        self.perform_update(serializer)  # Save the updated user instance
+        return Response(serializer.data)
