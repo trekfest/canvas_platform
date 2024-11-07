@@ -20,7 +20,15 @@ from dj_rest_auth.views import LoginView
 from allauth.account.signals import user_logged_in
 from django.contrib.auth import get_user_model
 from rest_framework.generics import RetrieveUpdateAPIView
+from django.core.mail import send_mail
+from django.conf import settings
+from django.http import HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+import json
+from hashlib import sha256
 
+# send_mail('A cool subject', 'A stunning message', settings.EMAIL_HOST_USER, ["colten478@gmail.com"])
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -94,6 +102,8 @@ class GoogleLoginCallback(APIView):
         else:
             logger.info(f"Retrieved existing user with pk={user.pk}, email={user.email}")
 
+        print(sha256((user.username+user.email+settings.EMAIL_SECRET_KEY).encode()).hexdigest())
+
         response_data = {
             "access_token": access_token,
             "refresh_token": refresh_token,
@@ -139,18 +149,117 @@ class UserLoginView(LoginView):
             return Response({"message": "Login successful"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class UserUpdateView(RetrieveUpdateAPIView):
-    queryset = CustomUser.objects.all()
-    serializer_class = UserUpdateSerializer
-    permission_classes = [permissions.IsAdminUser]
+# class UserUpdateView(RetrieveUpdateAPIView):
+#     queryset = CustomUser.objects.all()
+#     serializer_class = UserUpdateSerializer
+#     permission_classes = [permissions.IsAdminUser]
 
-    def get_object(self):
-        user_id = self.kwargs.get("pk")  # Assuming 'pk' is used in the URL
-        return get_object_or_404(CustomUser, pk=user_id)
+#     def get_object(self):
+#         user_id = self.kwargs.get("pk")  # Assuming 'pk' is used in the URL
+#         return get_object_or_404(CustomUser, pk=user_id)
 
-    def patch(self, request, *args, **kwargs):
-        user = self.get_object()
-        serializer = self.get_serializer(user, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)  # This will raise a 400 response if validation fails
-        self.perform_update(serializer)  # Save the updated user instance
-        return Response(serializer.data)
+#     def patch(self, request, *args, **kwargs):
+#         user = self.get_object()
+#         serializer = self.get_serializer(user, data=request.data, partial=True)
+#         serializer.is_valid(raise_exception=True)  # This will raise a 400 response if validation fails
+#         self.perform_update(serializer)  # Save the updated user instance
+#         return Response(serializer.data)
+
+@csrf_exempt
+def registration_email(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        
+        first_name = data.get("first_name")
+        last_name = data.get("last_name")
+        email = data.get("email")
+        username = data.get("username")
+        password = data.get("password")
+        code = sha256((username+email+settings.EMAIL_SECRET_KEY).encode()).hexdigest()
+
+        user, created = CustomUser.objects.get_or_create(
+            email=email,
+            defaults={
+                'username': username,
+                "first_name": first_name,
+                "last_name": last_name,
+                'is_active': False,
+            }
+        )
+        if created:
+            user.set_password(password)
+            user.save()
+
+            send_mail(
+                'Activate your account',
+                f'Click this link to activate your account: http://localhost:8000/api/v1/auth/activate/{user.pk}/{code}',
+                settings.EMAIL_HOST_USER,
+                [email]
+            )
+        
+        return JsonResponse({"message": "Email sent"}, status=200)
+    else:
+        return HttpResponse("You need to make a POST request to this endpoint to send an email.")
+
+def activate_user(request, pk, code):
+    user = get_object_or_404(CustomUser, pk=pk)
+    if user.is_active:
+        return HttpResponse("User already activated")
+    if sha256((user.username+user.email+settings.EMAIL_SECRET_KEY).encode()).hexdigest() == code:
+        user.is_active = True
+        user.save()
+        return HttpResponse("User activated")
+    else:
+        return HttpResponse("Invalid activation code")
+
+@csrf_exempt
+def update_user(request):
+    if  request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        
+        if data.get("code"):
+            if data.get("own_email"):
+                suser = get_object_or_404(CustomUser, email=data.get("own_email"))
+            elif data.get("own_username"):
+                suser = get_object_or_404(CustomUser, username=data.get("own_username"))
+            else:
+                return JsonResponse({"error": "Missing own_email or own_username"}, status=400)
+                
+            if sha256((suser.username+suser.email+settings.EMAIL_SECRET_KEY).encode()).hexdigest() != data.get("code"):
+                return JsonResponse({"error": "Invalid code"}, status=400)
+            
+            if suser.role != 'admin':
+                return JsonResponse({"error": "You need to be an admin to update a user"}, status=403)
+        else:
+            return JsonResponse({"error": "Missing code"}, status=400)
+
+        if data.get("email"):
+            user = get_object_or_404(CustomUser, email=data.get("email"))
+        else:
+            return JsonResponse({"error": "Missing email"}, status=400)
+
+        if data.get("username"):
+            user.username = data.get("username")
+        if data.get("first_name"):
+            user.first_name = data.get("first_name")
+        if data.get("last_name"):
+            user.last_name = data.get("last_name")
+        if data.get("role"):
+            match data.get("role"):
+                case 1:
+                    user.role = 'admin'
+                case 2:
+                    user.role = 'student'
+                case 3:
+                    user.role = 'teacher'
+        
+        user.save()
+        return JsonResponse({"message": "User updated"}, status=200)
+    else:
+        return HttpResponse("You need to make a POST request to this endpoint to update a user.")

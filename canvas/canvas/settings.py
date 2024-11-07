@@ -13,6 +13,9 @@ from datetime import timedelta
 import os
 from pathlib import Path
 from decouple import config
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -166,7 +169,14 @@ ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 ACCOUNT_CONFIRM_EMAIL_ON_GET = True 
 
 #EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = os.getenv('SMTP_HOST')
+EMAIL_PORT = os.getenv('SMTP_PORT')
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.getenv('SMTP_EMAIL')
+EMAIL_HOST_PASSWORD = os.getenv('SMTP_PASSWORD')
 
+EMAIL_SECRET_KEY = os.getenv('EMAIL_SECRET_KEY')
 
 # dj-rest-auth settings
 REST_AUTH_REGISTER_SERIALIZERS = {
