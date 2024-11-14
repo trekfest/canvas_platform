@@ -10,40 +10,44 @@ from django.shortcuts import get_object_or_404, render
 from django.views import View
 import requests
 from django.urls import reverse
-from rest_framework import status, permissions
+from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import generics
 from .models import CustomUser
-from .serializers import (
-    UserLoginSerializer,
-    UserRegistrationSerializer,
-    UserUpdateSerializer
-)
+from .serializers import UserLoginSerializer, UserProfileSerializer, UserRegistrationSerializer, UserUpdateSerializer
 from dj_rest_auth.views import LoginView
 from allauth.account.signals import user_logged_in
 from django.contrib.auth import get_user_model
 from rest_framework.generics import RetrieveUpdateAPIView
+from django.core.mail import send_mail
+from django.conf import settings
+from django.http import HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+import json
+from hashlib import sha256
+from rest_framework.permissions import IsAuthenticated
+from rest_framework_simplejwt.tokens import RefreshToken
+# send_mail('A cool subject', 'A stunning message', settings.EMAIL_HOST_USER, ["colten478@gmail.com"])
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
 
-
-# google OAuth login
 class GoogleLogin(SocialLoginView):
     adapter_class = GoogleOAuth2Adapter
     callback_url = settings.GOOGLE_OAUTH_CALLBACK_URL
     client_class = OAuth2Client
 
-
 class GoogleLoginCallback(APIView):
     def get(self, request, *args, **kwargs):
         code = request.GET.get("code")
 
-        if not code:
+        if code is None:
             return Response({"error": "Authorization code not provided"}, status=status.HTTP_400_BAD_REQUEST)
-
+        
         token_endpoint_url = "https://oauth2.googleapis.com/token"
+        
         payload = {
             'code': code,
             'client_id': settings.GOOGLE_OAUTH_CLIENT_ID,
@@ -53,6 +57,7 @@ class GoogleLoginCallback(APIView):
         }
 
         response = requests.post(token_endpoint_url, data=payload)
+
         if response.status_code != 200:
             return Response(response.json(), status=response.status_code)
 
@@ -76,28 +81,35 @@ class GoogleLoginCallback(APIView):
 
         random_password = secrets.token_urlsafe(20)
 
+        # Retrieve or create the user in the database
         user, created = CustomUser.objects.get_or_create(
             email=email,
             defaults={
                 'username': email.split('@')[0],
                 "first_name": first_name,
                 "last_name": last_name,
+                'password': random_password
             }
         )
         if not user.username:
-            user.username = email.split('@')[0]
+            user.username = email.split('@')[0]  
             user.save()
 
         if created:
             user.set_password(random_password)
-            user.save()
-            logger.info(f"Created new user: {user.email}")
+            user.save()  # Ensures the user data is saved
+            logger.info(f"Created new user with pk={user.pk}, email={user.email}")
         else:
-            logger.info(f"Retrieved existing user: {user.email}")
+            logger.info(f"Retrieved existing user with pk={user.pk}, email={user.email}")
+
+        # Generate a JWT token for the user
+        # refresh = RefreshToken.for_user(user)
+        # access_token = str(refresh.access_token)
 
         response_data = {
             "access_token": access_token,
             "refresh_token": refresh_token,
+            #"refresh_token": str(refresh),
             "user": {
                 "pk": user.pk,
                 "email": user.email,
@@ -108,9 +120,7 @@ class GoogleLoginCallback(APIView):
         }
 
         return Response(response_data, status=status.HTTP_200_OK)
-
-
-# signal to save google user data
+    
 @receiver(user_logged_in)
 def save_google_user_data(sender, request, user, **kwargs):
     user.email = request.user.email
@@ -119,40 +129,6 @@ def save_google_user_data(sender, request, user, **kwargs):
     user.save()
 
 
-# user registration
-class UserRegistrationView(generics.CreateAPIView):
-    serializer_class = UserRegistrationSerializer
-
-
-# user login
-class UserLoginView(LoginView):
-    serializer_class = UserLoginSerializer
-
-    def post(self, request, *args, **kwargs):
-        serializer = self.serializer_class(data=request.data)
-        if serializer.is_valid():
-            return Response({"message": "Login successful"}, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-# user profile update
-class UserUpdateView(RetrieveUpdateAPIView):
-    queryset = CustomUser.objects.all()
-    serializer_class = UserUpdateSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_object(self):
-        return self.request.user
-
-    def patch(self, request, *args, **kwargs):
-        user = self.get_object()
-        serializer = self.get_serializer(user, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
-        return Response(serializer.data)
-
-
-# login page view
 class LoginPage(View):
     def get(self, request, *args, **kwargs):
         return render(
@@ -163,3 +139,184 @@ class LoginPage(View):
                 "google_client_id": settings.GOOGLE_OAUTH_CLIENT_ID,
             },
         )
+    
+class UserRegistrationView(generics.CreateAPIView):
+    serializer_class = UserRegistrationSerializer
+
+class UserLoginView(LoginView):
+    serializer_class = UserLoginSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.serializer_class(data=request.data)
+        if serializer.is_valid():
+            return Response({"message": "Login successful"}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+# class UserUpdateView(RetrieveUpdateAPIView):
+#     queryset = CustomUser.objects.all()
+#     serializer_class = UserUpdateSerializer
+#     permission_classes = [permissions.IsAdminUser]
+
+#     def get_object(self):
+#         user_id = self.kwargs.get("pk")  # Assuming 'pk' is used in the URL
+#         return get_object_or_404(CustomUser, pk=user_id)
+
+#     def patch(self, request, *args, **kwargs):
+#         user = self.get_object()
+#         serializer = self.get_serializer(user, data=request.data, partial=True)
+#         serializer.is_valid(raise_exception=True)  # This will raise a 400 response if validation fails
+#         self.perform_update(serializer)  # Save the updated user instance
+#         return Response(serializer.data)
+
+@csrf_exempt
+def registration_email(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        
+        first_name = data.get("first_name")
+        last_name = data.get("last_name")
+        email = data.get("email")
+        username = data.get("username")
+        password = data.get("password")
+        code = sha256((username+email+settings.EMAIL_SECRET_KEY).encode()).hexdigest()
+
+        user, created = CustomUser.objects.get_or_create(
+            email=email,
+            defaults={
+                'username': username,
+                "first_name": first_name,
+                "last_name": last_name,
+                'is_active': False,
+            }
+        )
+        if created:
+            user.set_password(password)
+            user.save()
+
+            send_mail(
+                'Activate your account',
+                f'Click this link to activate your account: http://localhost:8000/api/v1/auth/activate/{user.pk}/{code}',
+                settings.EMAIL_HOST_USER,
+                [email]
+            )
+        
+        return JsonResponse({"message": "Email sent"}, status=200)
+    else:
+        return HttpResponse("You need to make a POST request to this endpoint to send an email.")
+
+def activate_user(request, pk, code):
+    user = get_object_or_404(CustomUser, pk=pk)
+    if user.is_active:
+        return HttpResponse("User already activated")
+    if sha256((user.username+user.email+settings.EMAIL_SECRET_KEY).encode()).hexdigest() == code:
+        user.is_active = True
+        user.save()
+        return HttpResponse("User activated")
+    else:
+        return HttpResponse("Invalid activation code")
+
+@csrf_exempt
+def update_user(request):
+    if  request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        
+        if data.get("code"):
+            if data.get("own_email"):
+                suser = get_object_or_404(CustomUser, email=data.get("own_email"))
+            elif data.get("own_username"):
+                suser = get_object_or_404(CustomUser, username=data.get("own_username"))
+            else:
+                return JsonResponse({"error": "Missing own_email or own_username"}, status=400)
+                
+            if sha256((suser.username+suser.email+settings.EMAIL_SECRET_KEY).encode()).hexdigest() != data.get("code"):
+                return JsonResponse({"error": "Invalid code"}, status=400)
+            
+            if suser.role != 'admin':
+                return JsonResponse({"error": "You need to be an admin to update a user"}, status=403)
+        else:
+            return JsonResponse({"error": "Missing code"}, status=400)
+
+        if data.get("email"):
+            user = get_object_or_404(CustomUser, email=data.get("email"))
+        else:
+            return JsonResponse({"error": "Missing email"}, status=400)
+
+        if data.get("username"):
+            user.username = data.get("username")
+        if data.get("first_name"):
+            user.first_name = data.get("first_name")
+        if data.get("last_name"):
+            user.last_name = data.get("last_name")
+        if data.get("role"):
+            match data.get("role"):
+                case 1:
+                    user.role = 'admin'
+                case 2:
+                    user.role = 'student'
+                case 3:
+                    user.role = 'teacher'
+        
+        user.save()
+        return JsonResponse({"message": "User updated"}, status=200)
+    else:
+        return HttpResponse("You need to make a POST request to this endpoint to update a user.")
+
+class UpdateProfilePicture(APIView):
+    """
+    This view allows a user to update their profile picture using an access token for authentication.
+    """
+
+    def post(self, request, *args, **kwargs):
+        # Step 1: Extract the access token from the Authorization header or request data
+        access_token = request.data.get('access_token') or request.headers.get('Authorization')
+        if not access_token:
+            return Response({"error": "No access token provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Step 2: Verify the token with Google API and get user data
+        user_info = self.verify_google_token(access_token)
+        if not user_info:
+            return Response({"error": "Invalid or expired token"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        # Step 3: Retrieve the profile photo from the request
+        if 'image' not in request.FILES:
+            return Response({"error": "No image file provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        image = request.FILES['image']
+
+        # Step 4: Get or create the user based on email
+        email = user_info.get('email')
+        try:
+            user = get_user_model().objects.get(email=email)
+        except get_user_model().DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Step 5: Save the uploaded image to the user's profile
+        user.image.save(f"{user.username}_profile.jpg", image, save=True)
+
+        return Response({"message": "Profile picture updated successfully"}, status=status.HTTP_200_OK)
+
+    def verify_google_token(self, access_token):
+        """
+        Verify the access token by making a request to Google's OAuth 2.0 endpoint.
+        """
+        url = f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={access_token}"
+        response = requests.get(url)
+
+        if response.status_code == 200:
+            return response.json()  # Returns the user info if token is valid
+        else:
+            return None  # Return None if token is invalid
+    
+class UserProfileView(RetrieveUpdateAPIView):
+    queryset = CustomUser.objects.all()
+    serializer_class = UserProfileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user

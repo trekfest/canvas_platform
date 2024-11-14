@@ -2,20 +2,15 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, Permis
 from django.db import models
 from django.core.mail import send_mail
 from django.utils.crypto import get_random_string
-from django.utils import timezone
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, email, username=None, first_name="", last_name="", password=None, role='student'):
         if not email:
             raise ValueError("Users must have an email address")
         
-        # Generate username if not provided
-        if not username:
-            username = email.split('@')[0]
-
         user = self.model(
             email=self.normalize_email(email),
-            username=username,
+            username=username or email.split('@')[0],
             first_name=first_name,
             last_name=last_name,
             role=role,
@@ -50,17 +45,17 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         ('student', 'Student'),
         ('teacher', 'Teacher'),
     ]
-
+    
     email = models.EmailField(max_length=255, unique=True)
     username = models.CharField(max_length=30, unique=True, null=True, blank=True)
     first_name = models.CharField(max_length=30)
     last_name = models.CharField(max_length=30)
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='student')
-    profile_photo = models.ImageField(upload_to='profile_photos/', blank=True, null=True)  # New field
-    date_joined = models.DateTimeField(default=timezone.now)
+    date_joined = models.DateTimeField(auto_now_add=True)
     last_login = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
+    image = models.ImageField(upload_to='profile_images/', blank=True, null=True)
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username', 'first_name', 'last_name']

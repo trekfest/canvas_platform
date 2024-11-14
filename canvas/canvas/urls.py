@@ -16,9 +16,9 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import include, path, re_path
-
+from django.conf import settings
+from django.conf.urls.static import static
 from accounts.views import GoogleLoginCallback, GoogleLogin, LoginPage
-
 from accounts.views import GoogleLogin, LoginPage
 
 urlpatterns = [
@@ -29,3 +29,6 @@ urlpatterns = [
     re_path(r"^api/v1/auth/accounts/", include("allauth.urls")),
     path("api/v1/auth/google/callback/",GoogleLoginCallback.as_view(),name="google_login_callback",),
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
