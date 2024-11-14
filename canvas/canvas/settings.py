@@ -138,7 +138,6 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
-
     'DEFAULT_AUTHENTICATION_CLASSES': (        
         'dj_rest_auth.jwt_auth.JWTCookieAuthentication',
     )
@@ -164,9 +163,9 @@ SIMPLE_JWT = {
 # dj-rest-auth
 REST_AUTH = {
     "USE_JWT": True,
-    "JWT_AUTH_COOKIE": "_auth",  # Name of access token cookie
-    "JWT_AUTH_REFRESH_COOKIE": "_refresh", # Name of refresh token cookie
-    "JWT_AUTH_HTTPONLY": False,  # Makes sure refresh token is sent
+    "JWT_AUTH_COOKIE": SIMPLE_JWT['AUTH_COOKIE'],  # Name of access token cookie
+    "JWT_AUTH_REFRESH_COOKIE": SIMPLE_JWT['AUTH_COOKIE_REFRESH'], # Name of refresh token cookie
+    "JWT_AUTH_HTTPONLY": True,  # Makes sure refresh token is sent
 }
 
 # Email verification settings

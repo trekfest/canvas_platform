@@ -9,13 +9,14 @@ from django.dispatch import receiver
 from django.shortcuts import get_object_or_404, render
 from django.views import View
 import requests
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework import generics
 from .models import CustomUser
-from .serializers import UserLoginSerializer, UserProfileSerializer, UserRegistrationSerializer, UserUpdateSerializer
+from .serializers import UserLoginSerializer, UserProfileSerializer, UserRegistrationSerializer
 from dj_rest_auth.views import LoginView
 from allauth.account.signals import user_logged_in
 from django.contrib.auth import get_user_model
@@ -91,35 +92,48 @@ class GoogleLoginCallback(APIView):
                 'password': random_password
             }
         )
-        if not user.username:
-            user.username = email.split('@')[0]  
-            user.save()
-
         if created:
             user.set_password(random_password)
-            user.save()  # Ensures the user data is saved
+            user.save()
             logger.info(f"Created new user with pk={user.pk}, email={user.email}")
         else:
             logger.info(f"Retrieved existing user with pk={user.pk}, email={user.email}")
 
         # Generate a JWT token for the user
-        # refresh = RefreshToken.for_user(user)
-        # access_token = str(refresh.access_token)
+        refresh = RefreshToken.for_user(user)
+        access_token = str(refresh.access_token)
 
+        # Prepare the response data
         response_data = {
             "access_token": access_token,
-            "refresh_token": refresh_token,
-            #"refresh_token": str(refresh),
+            "refresh_token": str(refresh),
             "user": {
                 "pk": user.pk,
                 "email": user.email,
                 "username": user.username,
                 "first_name": user.first_name,
-                "last_name": user.last_name,
-            },
+                "last_name": user.last_name,    
+            }
         }
 
-        return Response(response_data, status=status.HTTP_200_OK)
+        # Create the response object and set cookies
+        response = Response(response_data, status=status.HTTP_200_OK)
+        response.set_cookie(
+            key=settings.SIMPLE_JWT['AUTH_COOKIE'],
+            value=access_token,
+            httponly=True,
+            secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE'],
+            samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE']
+        )
+        response.set_cookie(
+            key=settings.SIMPLE_JWT['AUTH_COOKIE_REFRESH'],
+            value=str(refresh),
+            httponly=True,
+            secure=settings.SIMPLE_JWT['AUTH_COOKIE_SECURE'],
+            samesite=settings.SIMPLE_JWT['AUTH_COOKIE_SAMESITE']
+        )
+
+        return response
     
 @receiver(user_logged_in)
 def save_google_user_data(sender, request, user, **kwargs):
@@ -152,21 +166,7 @@ class UserLoginView(LoginView):
             return Response({"message": "Login successful"}, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-# class UserUpdateView(RetrieveUpdateAPIView):
-#     queryset = CustomUser.objects.all()
-#     serializer_class = UserUpdateSerializer
-#     permission_classes = [permissions.IsAdminUser]
 
-#     def get_object(self):
-#         user_id = self.kwargs.get("pk")  # Assuming 'pk' is used in the URL
-#         return get_object_or_404(CustomUser, pk=user_id)
-
-#     def patch(self, request, *args, **kwargs):
-#         user = self.get_object()
-#         serializer = self.get_serializer(user, data=request.data, partial=True)
-#         serializer.is_valid(raise_exception=True)  # This will raise a 400 response if validation fails
-#         self.perform_update(serializer)  # Save the updated user instance
-#         return Response(serializer.data)
 
 @csrf_exempt
 def registration_email(request):
@@ -181,7 +181,7 @@ def registration_email(request):
         email = data.get("email")
         username = data.get("username")
         password = data.get("password")
-        code = sha256((username+email+settings.EMAIL_SECRET_KEY).encode()).hexdigest()
+        code = sha256((username + email + settings.EMAIL_SECRET_KEY).encode()).hexdigest()
 
         user, created = CustomUser.objects.get_or_create(
             email=email,
@@ -206,97 +206,105 @@ def registration_email(request):
         return JsonResponse({"message": "Email sent"}, status=200)
     else:
         return HttpResponse("You need to make a POST request to this endpoint to send an email.")
-
+    
+@csrf_exempt
 def activate_user(request, pk, code):
     user = get_object_or_404(CustomUser, pk=pk)
     if user.is_active:
         return HttpResponse("User already activated")
-    if sha256((user.username+user.email+settings.EMAIL_SECRET_KEY).encode()).hexdigest() == code:
+    
+    if sha256((user.username + user.email + settings.EMAIL_SECRET_KEY).encode()).hexdigest() == code:
         user.is_active = True
         user.save()
-        return HttpResponse("User activated")
+
+        # Generate JWT token for activated user
+        refresh = RefreshToken.for_user(user)
+        access_token = str(refresh.access_token)
+        
+        return JsonResponse({"message": "User activated", "access_token": access_token}, status=200)
     else:
         return HttpResponse("Invalid activation code")
 
 @csrf_exempt
 def update_user(request):
-    if  request.method == 'POST':
+    if request.method == 'POST':
         try:
             data = json.loads(request.body)
         except json.JSONDecodeError:
             return JsonResponse({"error": "Invalid JSON"}, status=400)
-        
-        if data.get("code"):
-            if data.get("own_email"):
-                suser = get_object_or_404(CustomUser, email=data.get("own_email"))
-            elif data.get("own_username"):
-                suser = get_object_or_404(CustomUser, username=data.get("own_username"))
-            else:
-                return JsonResponse({"error": "Missing own_email or own_username"}, status=400)
-                
-            if sha256((suser.username+suser.email+settings.EMAIL_SECRET_KEY).encode()).hexdigest() != data.get("code"):
-                return JsonResponse({"error": "Invalid code"}, status=400)
-            
-            if suser.role != 'admin':
-                return JsonResponse({"error": "You need to be an admin to update a user"}, status=403)
-        else:
-            return JsonResponse({"error": "Missing code"}, status=400)
 
+        # Ensure the user is authenticated via JWT
+        auth_header = request.headers.get('Authorization', None)
+        if not auth_header:
+            return JsonResponse({"error": "Authorization header is missing"}, status=401)
+
+        try:
+            # Split 'Bearer' and the actual token
+            token = auth_header.split()[1]
+            # Attempt to decode the token and get the user
+            user = JWTAuthentication().get_user(validated_token=token)
+            
+            # Debugging: print out the user object to inspect its structure
+            print(f"Decoded JWT token result: {user}")
+            
+            if isinstance(user, str):
+                # If the user is a string, it might be an error message, so handle it
+                return JsonResponse({"error": "Authentication failed. Token invalid or expired."}, status=401)
+            
+        except Exception as e:
+            return JsonResponse({"error": f"Authentication failed: {str(e)}"}, status=401)
+
+        # Find the user to update by email (only admin can update others)
         if data.get("email"):
-            user = get_object_or_404(CustomUser, email=data.get("email"))
+            target_user = get_object_or_404(CustomUser, email=data.get("email"))
         else:
             return JsonResponse({"error": "Missing email"}, status=400)
 
+        # Check if the authenticated user is an admin
+        if user.role != 'admin':  # Only admin can update other users
+            if user != target_user:
+                return JsonResponse({"error": "You can only update your own information"}, status=403)
+
+        # Update the user fields (admin can update all, non-admins can only update their own details)
         if data.get("username"):
-            user.username = data.get("username")
+            target_user.username = data.get("username")
         if data.get("first_name"):
-            user.first_name = data.get("first_name")
+            target_user.first_name = data.get("first_name")
         if data.get("last_name"):
-            user.last_name = data.get("last_name")
-        if data.get("role"):
-            match data.get("role"):
-                case 1:
-                    user.role = 'admin'
-                case 2:
-                    user.role = 'student'
-                case 3:
-                    user.role = 'teacher'
-        
-        user.save()
-        return JsonResponse({"message": "User updated"}, status=200)
-    else:
-        return HttpResponse("You need to make a POST request to this endpoint to update a user.")
+            target_user.last_name = data.get("last_name")
+
+        if user.role == 'admin':  # Admin can update roles
+            if data.get("role"):
+                new_role = data.get("role")
+                if new_role in ['admin', 'student', 'teacher']:
+                    target_user.role = new_role
+                else:
+                    return JsonResponse({"error": "Invalid role. Valid roles are: admin, student, teacher."}, status=400)
+
+        # Save the updated user
+        target_user.save()
+
+        return JsonResponse({"message": "User updated successfully"}, status=200)
+
+    return JsonResponse({"error": "Invalid request method. Please use POST."}, status=405)
 
 class UpdateProfilePicture(APIView):
     """
     This view allows a user to update their profile picture using an access token for authentication.
     """
+    permission_classes = [IsAuthenticated]  # Require authentication to access this view
 
     def post(self, request, *args, **kwargs):
-        # Step 1: Extract the access token from the Authorization header or request data
-        access_token = request.data.get('access_token') or request.headers.get('Authorization')
-        if not access_token:
-            return Response({"error": "No access token provided"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Step 2: Verify the token with Google API and get user data
-        user_info = self.verify_google_token(access_token)
-        if not user_info:
-            return Response({"error": "Invalid or expired token"}, status=status.HTTP_401_UNAUTHORIZED)
-
-        # Step 3: Retrieve the profile photo from the request
+        # Step 1: Retrieve the profile photo from the request
         if 'image' not in request.FILES:
             return Response({"error": "No image file provided."}, status=status.HTTP_400_BAD_REQUEST)
 
         image = request.FILES['image']
 
-        # Step 4: Get or create the user based on email
-        email = user_info.get('email')
-        try:
-            user = get_user_model().objects.get(email=email)
-        except get_user_model().DoesNotExist:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+        # Step 2: Get the authenticated user
+        user = request.user
 
-        # Step 5: Save the uploaded image to the user's profile
+        # Step 3: Save the uploaded image to the user's profile
         user.image.save(f"{user.username}_profile.jpg", image, save=True)
 
         return Response({"message": "Profile picture updated successfully"}, status=status.HTTP_200_OK)
