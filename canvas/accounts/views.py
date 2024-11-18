@@ -103,6 +103,7 @@ class GoogleLoginCallback(APIView):
         refresh = RefreshToken.for_user(user)
         access_token = str(refresh.access_token)
 
+
         # Prepare the response data
         response_data = {
             "access_token": access_token,
@@ -112,7 +113,8 @@ class GoogleLoginCallback(APIView):
                 "email": user.email,
                 "username": user.username,
                 "first_name": user.first_name,
-                "last_name": user.last_name,    
+                "last_name": user.last_name,
+                "role": user.role,    
             }
         }
 
